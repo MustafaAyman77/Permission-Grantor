@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="360dp"
+    android:height="180dp"
+    android:viewportWidth="360"
+    android:viewportHeight="180">
+    <!-- Decorative cyber grid & glowing nodes representing Shizuku ADB bridge -->
+    <path
+        android:pathData="M0,0h360v180h-360z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="360"
+                android:endY="180"
+                android:type="linear">
+                <item android:offset="0" android:color="#081026" />
+                <item android:offset="0.5" android:color="#0F1E3E" />
+                <item android:offset="1" android:color="#0A2A36" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Glowing circuit lines -->
+    <path
+        android:strokeColor="#2200F5D4"
+        android:strokeWidth="1.5"
+        android:pathData="M20,40 L110,40 L140,70 M20,140 L90,140 L130,100 M340,35 L250,35 L220,65 M340,135 L260,135 L225,100" />
+    <path
+        android:fillColor="#4400F5D4"
+        android:pathData="M20,40m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0 M20,140m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0 M340,35m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0 M340,135m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <!-- Outer radar rings -->
+    <path
+        android:strokeColor="#1800F5D4"
+        android:strokeWidth="2"
+        android:pathData="M180,90m-72,0a72,72 0,1 1,144 0a72,72 0,1 1,-144 0" />
+    <path
+        android:strokeColor="#3300BBF9"
+        android:strokeWidth="1.5"
+        android:pathData="M180,90m-52,0a52,52 0,1 1,104 0a52,52 0,1 1,-104 0" />
+    <!-- Central Shield -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M180,38L142,55v26c0,24.2 16.2,46.8 38,52.3 21.8,-5.5 38,-28.1 38,-52.3V55L180,38z" />
+    <path
+        android:fillColor="#0B132B"
+        android:pathData="M180,46L150,59.5v21.5c0,19.5 12.8,37.8 30,42.5 17.2,-4.7 30,-23 30,-42.5V59.5L180,46z" />
+    <!-- Key / Checkmark inside shield -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M174,104l-14,-14l4.9,-4.9L174,94.2l21.1,-21.1L200,78L174,104z" />
+</vector>

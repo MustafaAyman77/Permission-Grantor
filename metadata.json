@@ -1,0 +1,6 @@
+{
+  "name": "Permission Grantor",
+  "description": "منح الصلاحيات الحساسة للتطبيقات المثبتة من خارج المتجر فورا عبر خدمة Shizuku دون الحاجة للروت",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
