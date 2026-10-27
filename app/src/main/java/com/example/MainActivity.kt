@@ -16,11 +16,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.InstallMobile
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.InstallMobile
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -42,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.ConnectionStatusBadge
+import com.example.ui.screens.ApkInstallerScreen
 import com.example.ui.screens.AppDetailPermissionsScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.SettingsGuideScreen
@@ -72,7 +75,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Automatically re-check Shizuku connection and permission status when returning to the app
         viewModel.refreshShizukuStatus()
         viewModel.uiState.value.selectedApp?.let {
             viewModel.loadPermissionsForApp(it, silent = true)
@@ -151,6 +153,24 @@ fun PermissionGrantorApp(
                     modifier = Modifier.testTag("nav_tab_home")
                 )
 
+                val isInstaller = uiState.currentDestination == MainNavDestination.APK_INSTALLER
+                NavigationBarItem(
+                    selected = isInstaller,
+                    onClick = { viewModel.navigateTo(MainNavDestination.APK_INSTALLER) },
+                    icon = {
+                        Icon(
+                            imageVector = if (isInstaller) {
+                                Icons.Filled.InstallMobile
+                            } else {
+                                Icons.Outlined.InstallMobile
+                            },
+                            contentDescription = stringResource(R.string.nav_installer)
+                        )
+                    },
+                    label = { Text(stringResource(R.string.nav_installer)) },
+                    modifier = Modifier.testTag("nav_tab_installer")
+                )
+
                 val isAppsOrDetail = uiState.currentDestination == MainNavDestination.APPS_LIST ||
                     uiState.currentDestination == MainNavDestination.APP_PERMISSIONS_DETAIL
                 NavigationBarItem(
@@ -171,7 +191,7 @@ fun PermissionGrantorApp(
                     },
                     label = {
                         Text(
-                            text = uiState.selectedApp?.appName?.take(12)
+                            text = uiState.selectedApp?.appName?.take(10)
                                 ?: stringResource(R.string.nav_apps)
                         )
                     },
@@ -208,6 +228,7 @@ fun PermissionGrantorApp(
                         isLoadingApps = uiState.isLoadingApps,
                         searchQuery = uiState.searchQuery,
                         appFilterMode = uiState.appFilterMode,
+                        latestInstallReport = uiState.latestInstallReport,
                         bannerMessage = uiState.bannerMessage,
                         isBannerError = uiState.isBannerError,
                         operationLogs = uiState.operationLogs,
@@ -215,11 +236,39 @@ fun PermissionGrantorApp(
                         onFilterModeChange = viewModel::setAppFilterMode,
                         onRecheckShizuku = viewModel::refreshShizukuStatus,
                         onRequestShizukuPermission = { viewModel.requestShizukuPermission() },
+                        onOpenApkInstaller = {
+                            viewModel.navigateTo(MainNavDestination.APK_INSTALLER)
+                        },
+                        onApkUriPicked = viewModel::onApkFileSelected,
                         onOpenSettingsGuide = {
                             viewModel.navigateTo(MainNavDestination.SETTINGS_GUIDE)
                         },
                         onSelectApp = viewModel::selectApp,
                         onDismissBanner = viewModel::dismissBanner
+                    )
+                }
+
+                MainNavDestination.APK_INSTALLER -> {
+                    ApkInstallerScreen(
+                        shizukuState = uiState.shizukuState,
+                        selectedStorePreset = uiState.selectedStorePreset,
+                        customInstallerPackage = uiState.customInstallerPackage,
+                        autoGrantOnInstall = uiState.autoGrantOnInstall,
+                        stagedApkInfo = uiState.stagedApkInfo,
+                        isInstallingApk = uiState.isInstallingApk,
+                        installReport = uiState.latestInstallReport,
+                        installedApps = uiState.allApps,
+                        bannerMessage = uiState.bannerMessage,
+                        isBannerError = uiState.isBannerError,
+                        onSelectStorePreset = viewModel::selectStorePreset,
+                        onCustomInstallerChange = viewModel::updateCustomInstallerPackage,
+                        onToggleAutoGrant = viewModel::setAutoGrantOnInstall,
+                        onApkUriPicked = viewModel::onApkFileSelected,
+                        onExecuteStagedApkInstall = viewModel::installStagedApkWithSpoofAndGrant,
+                        onSpoofAndGrantExistingApp = viewModel::spoofAndGrantExistingApp,
+                        onRequestShizukuPermission = { viewModel.requestShizukuPermission() },
+                        onDismissBanner = viewModel::dismissBanner,
+                        onBack = { viewModel.navigateTo(MainNavDestination.DASHBOARD) }
                     )
                 }
 

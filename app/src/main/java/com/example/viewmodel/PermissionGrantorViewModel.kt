@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
+import android.net.Uri
 import android.os.Build
 import android.os.RemoteException
 import androidx.lifecycle.AndroidViewModel
@@ -16,7 +17,11 @@ import com.example.model.PermissionFilterTab
 import com.example.model.PermissionStatusItem
 import com.example.model.SensitivePermissionsCatalog
 import com.example.model.ShizukuConnectionState
+import com.example.shizuku.ApkInstallReport
+import com.example.shizuku.ShizukuApkInstaller
 import com.example.shizuku.ShizukuPackageManager
+import com.example.shizuku.StagedApkInfo
+import com.example.shizuku.StoreIdentityPreset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +36,7 @@ import java.util.Locale
 
 enum class MainNavDestination {
     DASHBOARD,
+    APK_INSTALLER,
     APPS_LIST,
     APP_PERMISSIONS_DETAIL,
     SETTINGS_GUIDE
@@ -49,11 +55,25 @@ data class PermissionGrantorUiState(
     val permissionFilterTab: PermissionFilterTab = PermissionFilterTab.UNGRANTED,
     val isLoadingPermissions: Boolean = false,
     val isBatchGranting: Boolean = false,
+    // APK Installer & Spoofed Store Identity State
+    val selectedStorePreset: StoreIdentityPreset = StoreIdentityPreset.GOOGLE_PLAY,
+    val customInstallerPackage: String = "com.android.vending",
+    val autoGrantOnInstall: Boolean = true,
+    val stagedApkInfo: StagedApkInfo? = null,
+    val isInstallingApk: Boolean = false,
+    val latestInstallReport: ApkInstallReport? = null,
     val bannerMessage: String? = null,
     val isBannerError: Boolean = false,
     val operationLogs: List<GrantOperationLog> = emptyList(),
     val darkTheme: Boolean = true
-)
+) {
+    val effectiveInstallerPackage: String
+        get() = if (selectedStorePreset == StoreIdentityPreset.CUSTOM) {
+            customInstallerPackage.trim().ifEmpty { "com.android.vending" }
+        } else {
+            selectedStorePreset.installerPackage
+        }
+}
 
 class PermissionGrantorViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -69,7 +89,7 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
     val uiState: StateFlow<PermissionGrantorUiState> = _uiState.asStateFlow()
 
     /**
-     * Stores a pending permission grant action if the user clicked "منح الصلاحية عبر Shizuku"
+     * Stores a pending action (grant or APK install) if the user initiated an operation
      * before granting Shizuku permission to this app. Executed only after user approves.
      */
     private var pendingActionAfterShizukuAuth: (() -> Unit)? = null
@@ -90,14 +110,14 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
                 _uiState.update { it.copy(isRequestingShizukuPermission = false) }
                 refreshShizukuStatus()
                 if (granted) {
-                    showBanner("تم منح إذن استخدام Shizuku بنجاح! يمكنك الآن منح الصلاحيات فوراً.", isError = false)
+                    showBanner("تم منح إذن استخدام Shizuku بنجاح! جاري استكمال العملية...", isError = false)
                     val pending = pendingActionAfterShizukuAuth
                     pendingActionAfterShizukuAuth = null
                     pending?.invoke()
                 } else {
                     pendingActionAfterShizukuAuth = null
                     showBanner(
-                        "تم رفض إذن الوصول إلى Shizuku. يرجى الموافقة على الإذن لتتمكن من منح الصلاحيات للتطبيقات.",
+                        "تم رفض إذن الوصول إلى Shizuku. يرجى الموافقة على الإذن لتتمكن من تثبيت APK ومنح الصلاحيات.",
                         isError = true
                     )
                 }
@@ -171,7 +191,7 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
         try {
             binderAlive = Shizuku.pingBinder()
             if (binderAlive) {
-                isInstalled = true // If binder is alive, Shizuku service is present on the device
+                isInstalled = true
                 if (!Shizuku.isPreV11()) {
                     serverVersion = Shizuku.getVersion()
                     isAtLeast11 = serverVersion >= ShizukuPackageManager.MIN_SHIZUKU_VERSION
@@ -214,7 +234,7 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
 
         if (!state.isBinderAlive) {
             showBanner(
-                "خدمة Shizuku غير مفعّلة حالياً. يرجى تشغيل خدمة Shizuku أولاً (راجع تبويب دليل الإعدادات).",
+                "خدمة Shizuku غير مفعّلة حالياً. يرجى تشغيل خدمة Shizuku أولاً (راجع تبويب الإعدادات).",
                 isError = true
             )
             return
@@ -245,6 +265,199 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
             _uiState.update { it.copy(isRequestingShizukuPermission = false) }
             showBanner("تعذر طلب إذن Shizuku: ${e.localizedMessage}", isError = true)
         }
+    }
+
+    /**
+     * Called when the user selects an APK file via the system file picker.
+     * 1. Parses the APK's AndroidManifest.xml (package name, version, requested dangerous permissions).
+     * 2. Verifies Shizuku connection & requests `Shizuku.requestPermission()` if not granted yet.
+     */
+    fun onApkFileSelected(uri: Uri) {
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    currentDestination = MainNavDestination.APK_INSTALLER,
+                    isInstallingApk = true,
+                    bannerMessage = null
+                )
+            }
+            refreshShizukuStatus()
+
+            val context = getApplication<Application>()
+            val inspectResult = withContext(Dispatchers.IO) {
+                ShizukuApkInstaller.inspectSelectedApkUri(context, uri)
+            }
+
+            inspectResult.fold(
+                onSuccess = { staged ->
+                    _uiState.update {
+                        it.copy(
+                            stagedApkInfo = staged,
+                            isInstallingApk = false
+                        )
+                    }
+                    // Verify Shizuku status and request permission if needed
+                    val shizukuState = _uiState.value.shizukuState
+                    if (!shizukuState.isBinderAlive) {
+                        showBanner(
+                            "تم قراءة ملف APK (${staged.appLabel}) بنجاح، ولكن خدمة Shizuku غير مفعّلة حالياً. شغّل Shizuku ثم اضغط على بدء التثبيت.",
+                            isError = true
+                        )
+                    } else if (!shizukuState.isPermissionGranted) {
+                        showBanner(
+                            "تم تجهيز ملف APK (${staged.appLabel}). يرجى الموافقة على إذن Shizuku أولاً لتنفيذ التثبيت بهوية المتجر.",
+                            isError = false
+                        )
+                        requestShizukuPermission {
+                            installStagedApkWithSpoofAndGrant()
+                        }
+                    } else {
+                        // Shizuku is ready & authorized: automatically start the spoofed install + auto-grant!
+                        installStagedApkWithSpoofAndGrant()
+                    }
+                },
+                onFailure = { err ->
+                    _uiState.update { it.copy(isInstallingApk = false) }
+                    showBanner(
+                        "تعذر قراءة ملف APK المختار: ${err.localizedMessage ?: "ملف غير صالح"}",
+                        isError = true
+                    )
+                }
+            )
+        }
+    }
+
+    /**
+     * Installs the staged APK with the spoofed store identity (`com.android.vending` or custom)
+     * and automatically grants all requested dangerous runtime permissions via Shizuku.
+     */
+    fun installStagedApkWithSpoofAndGrant() {
+        val staged = _uiState.value.stagedApkInfo ?: run {
+            showBanner("يرجى اختيار ملف APK أولاً.", isError = true)
+            return
+        }
+
+        refreshShizukuStatus()
+        val shizukuState = _uiState.value.shizukuState
+
+        if (!shizukuState.isBinderAlive) {
+            showBanner(
+                "خدمة Shizuku غير مفعّلة حالياً. يرجى تفعيل Shizuku عبر ADB اللاسلكي أو USB قبل التثبيت.",
+                isError = true
+            )
+            return
+        }
+
+        if (!shizukuState.isPermissionGranted) {
+            requestShizukuPermission {
+                installStagedApkWithSpoofAndGrant()
+            }
+            return
+        }
+
+        val installerPkg = _uiState.value.effectiveInstallerPackage
+        val autoGrant = _uiState.value.autoGrantOnInstall
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isInstallingApk = true, bannerMessage = null) }
+            val context = getApplication<Application>()
+
+            val report = withContext(Dispatchers.IO) {
+                ShizukuApkInstaller.installApkAndGrantPermissions(
+                    context = context,
+                    stagedApk = staged,
+                    installerPackageName = installerPkg,
+                    autoGrantPermissions = autoGrant
+                )
+            }
+
+            _uiState.update {
+                it.copy(
+                    isInstallingApk = false,
+                    latestInstallReport = report,
+                    bannerMessage = if (report.isApkInstalledSuccess) {
+                        "تم تثبيت ${report.appName} بهوية المتجر ومنح ${report.grantedPermissions.size} صلاحية!"
+                    } else {
+                        report.overallErrorMessage ?: report.installerStatusMessage
+                    },
+                    isBannerError = !report.isApkInstalledSuccess
+                )
+            }
+
+            loadInstalledApps()
+        }
+    }
+
+    /**
+     * Spoofs the installer package name (`com.android.vending` or chosen store) AND grants all
+     * dangerous runtime permissions for an already-installed application via Shizuku.
+     */
+    fun spoofAndGrantExistingApp(app: InstalledAppItem) {
+        refreshShizukuStatus()
+        val shizukuState = _uiState.value.shizukuState
+
+        if (!shizukuState.isBinderAlive) {
+            showBanner(
+                "خدمة Shizuku غير مفعّلة حالياً. يرجى تشغيل Shizuku عبر ADB اللاسلكي أو USB أولاً.",
+                isError = true
+            )
+            return
+        }
+
+        if (!shizukuState.isPermissionGranted) {
+            requestShizukuPermission {
+                spoofAndGrantExistingApp(app)
+            }
+            return
+        }
+
+        val installerPkg = _uiState.value.effectiveInstallerPackage
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isInstallingApk = true, bannerMessage = null) }
+            val context = getApplication<Application>()
+
+            val report = withContext(Dispatchers.IO) {
+                ShizukuApkInstaller.spoofInstallerAndGrantForExistingApp(
+                    context = context,
+                    packageName = app.packageName,
+                    appName = app.appName,
+                    installerPackageName = installerPkg
+                )
+            }
+
+            _uiState.update {
+                it.copy(
+                    isInstallingApk = false,
+                    latestInstallReport = report,
+                    bannerMessage = "اكتمل تحديث هوية المتجر ومنح (${report.grantedPermissions.size}) صلاحية لتطبيق ${app.appName}",
+                    isBannerError = report.overallErrorMessage != null
+                )
+            }
+
+            loadInstalledApps()
+        }
+    }
+
+    fun selectStorePreset(preset: StoreIdentityPreset) {
+        _uiState.update {
+            it.copy(
+                selectedStorePreset = preset,
+                customInstallerPackage = if (preset != StoreIdentityPreset.CUSTOM) {
+                    preset.installerPackage
+                } else {
+                    it.customInstallerPackage
+                }
+            )
+        }
+    }
+
+    fun updateCustomInstallerPackage(pkg: String) {
+        _uiState.update { it.copy(customInstallerPackage = pkg) }
+    }
+
+    fun setAutoGrantOnInstall(enabled: Boolean) {
+        _uiState.update { it.copy(autoGrantOnInstall = enabled) }
     }
 
     /**
@@ -285,9 +498,11 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
                     val installerLabel = when {
                         isSystem -> "تطبيق نظام"
                         installerPkg in PLAY_STORE_INSTALLERS -> "متجر Google Play"
+                        installerPkg == "org.fdroid.fdroid" -> "متجر F-Droid"
+                        installerPkg == "com.aurora.store" -> "متجر Aurora Store"
                         installerPkg?.contains("packageinstaller", ignoreCase = true) == true -> "مثبت خارجياً (APK)"
                         installerPkg == null -> "مثبت خارجياً (خارج المتجر)"
-                        else -> "مصدر خارجي ($installerPkg)"
+                        else -> "مصدر ($installerPkg)"
                     }
 
                     val requestedPerms = pkg.requestedPermissions?.toList() ?: emptyList()
@@ -442,15 +657,12 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
 
     /**
      * Grants a single runtime permission immediately via Shizuku's IPackageManager.
-     * If Shizuku permission has not been granted to Permission Grantor yet, requests it
-     * via `Shizuku.requestPermission()` and waits for user approval before executing!
      */
     fun grantSinglePermission(permissionName: String) {
         val targetApp = _uiState.value.selectedApp ?: return
         refreshShizukuStatus()
         val shizukuState = _uiState.value.shizukuState
 
-        // 1. Check if Shizuku service is running
         if (!shizukuState.isBinderAlive) {
             val errMsg = "خدمة Shizuku غير مفعّلة. يرجى تشغيل خدمة Shizuku عبر ADB اللاسلكي أو USB أولاً."
             updatePermissionItemError(permissionName, errMsg)
@@ -459,7 +671,6 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
             return
         }
 
-        // 2. Check version >= 11
         if (!shizukuState.isVersionAtLeast11) {
             val errMsg = "إصدار Shizuku أقل من 11. يرجى تحديث تطبيق Shizuku."
             updatePermissionItemError(permissionName, errMsg)
@@ -467,7 +678,6 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
             return
         }
 
-        // 3. Check if our app has Shizuku permission; if not, request via Shizuku.requestPermission() and wait
         if (!shizukuState.isPermissionGranted) {
             showBanner("بانتظار موافقتك على إذن Shizuku لتنفيذ منح الصلاحية...", isError = false)
             requestShizukuPermission {
@@ -481,7 +691,6 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
 
     private fun executeGrantPermissionInternal(targetApp: InstalledAppItem, permissionName: String) {
         viewModelScope.launch {
-            // Mark item as granting
             _uiState.update { state ->
                 state.copy(
                     selectedAppPermissions = state.selectedAppPermissions.map { item ->
@@ -749,7 +958,8 @@ class PermissionGrantorViewModel(application: Application) : AndroidViewModel(ap
     private fun getInstallerPackage(pm: PackageManager, packageName: String): String? {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                pm.getInstallSourceInfo(packageName).installingPackageName
+                val info = pm.getInstallSourceInfo(packageName)
+                info.installingPackageName ?: info.initiatingPackageName
             } else {
                 @Suppress("DEPRECATION")
                 pm.getInstallerPackageName(packageName)

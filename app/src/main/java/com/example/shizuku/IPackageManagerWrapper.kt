@@ -2,6 +2,7 @@ package com.example.shizuku
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.IBinder
 import android.os.Process
 import android.os.RemoteException
@@ -20,12 +21,15 @@ interface IPackageManagerBridge {
 
     @Throws(RemoteException::class, SecurityException::class)
     fun grantRuntimePermission(packageName: String, permissionName: String, userId: Int)
+
+    @Throws(RemoteException::class, SecurityException::class)
+    fun setInstallerPackageName(targetPackage: String, installerPackageName: String)
 }
 
 /**
  * Provides access to Android's system IPackageManager wrapped with [ShizukuBinderWrapper]
- * so runtime permissions can be inspected and granted with Shizuku (ADB/Root) privileges
- * without opening system settings manually.
+ * so runtime permissions can be inspected and granted and installer package names can be
+ * modified with Shizuku (ADB/Root) privileges without opening system settings manually.
  */
 object ShizukuPackageManager {
 
@@ -122,6 +126,28 @@ object ShizukuPackageManager {
                     throw RemoteException("تعذر تنفيذ grantRuntimePermission: ${e.localizedMessage}")
                 }
             }
+
+            override fun setInstallerPackageName(
+                targetPackage: String,
+                installerPackageName: String
+            ) {
+                try {
+                    val method = iPackageManagerInstance.javaClass.getMethod(
+                        "setInstallerPackageName",
+                        String::class.java,
+                        String::class.java
+                    )
+                    method.invoke(iPackageManagerInstance, targetPackage, installerPackageName)
+                } catch (e: InvocationTargetException) {
+                    rethrowTargetException(e)
+                } catch (e: SecurityException) {
+                    throw e
+                } catch (e: RemoteException) {
+                    throw e
+                } catch (e: Throwable) {
+                    throw RemoteException("تعذر تعديل هوية المثبت عبر IPackageManager: ${e.localizedMessage}")
+                }
+            }
         }
     }
 
@@ -171,6 +197,24 @@ object ShizukuPackageManager {
     }
 
     /**
+     * Reads back the current installer package name for [packageName] from the system.
+     */
+    fun getVerifiedInstallerPackage(context: Context, packageName: String): String? {
+        val pm = context.packageManager
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val info = pm.getInstallSourceInfo(packageName)
+                info.installingPackageName ?: info.initiatingPackageName
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getInstallerPackageName(packageName)
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /**
      * Converts [SecurityException] or [RemoteException] into clear, user-friendly Arabic explanations.
      */
     fun formatShizukuException(throwable: Throwable, permissionName: String? = null): String {
@@ -190,23 +234,26 @@ object ShizukuPackageManager {
                     !Shizuku.pingBinder() ->
                         "خدمة Shizuku غير مفعّلة حالياً."
                     msg.contains("لم يتم منح تطبيق") ->
-                        "يرجى الموافقة على نافذة إذن Shizuku أولاً للسماح للتطبيق بتنفيذ أوامر المنح."
+                        "يرجى الموافقة على نافذة إذن Shizuku أولاً للسماح للتطبيق بتنفيذ أوامر المنح والتثبيت."
+                    msg.contains("installerPackageName", ignoreCase = true) ||
+                        msg.contains("not signed with", ignoreCase = true) ->
+                        "Shizuku لا يملك صلاحية تعديل المثبت مباشرة عبر الجلسة على هذا الإصدار من أندرويد؛ يتم استخدام خطة pm install -i البديلة."
                     msg.contains("not a changeable permission type", ignoreCase = true) ||
                         msg.contains("fixed", ignoreCase = true) ||
                         msg.contains("protection level", ignoreCase = true) ->
                         "الصلاحية ($shortPerm) محمية من النظام أو ثابتة ولا يسمح أندرويد بتغييرها عبر مستوى ADB، بل تتطلب تدخل المستخدم يدوياً من إعدادات النظام."
                     else ->
-                        "رفض النظام منح الصلاحية ($shortPerm) بسبب قيود الحماية (SecurityException): يوفّر Shizuku صلاحيات بمستوى ADB وليس روت كامل. التفاصيل: $msg"
+                        "رفض النظام العملية بسبب قيود الحماية (SecurityException): يوفّر Shizuku صلاحيات بمستوى ADB وليس روت كامل. التفاصيل: $msg"
                 }
             }
             else -> {
-                "حدث خطأ غير متوقع أثناء منح الصلاحية: ${throwable.localizedMessage ?: throwable.javaClass.simpleName}"
+                "حدث خطأ غير متوقع: ${throwable.localizedMessage ?: throwable.javaClass.simpleName}"
             }
         }
     }
 
     @Throws(RemoteException::class, SecurityException::class)
-    private fun rethrowTargetException(e: InvocationTargetException): Nothing {
+    internal fun rethrowTargetException(e: InvocationTargetException): Nothing {
         when (val target = e.targetException) {
             is SecurityException -> throw target
             is RemoteException -> throw target

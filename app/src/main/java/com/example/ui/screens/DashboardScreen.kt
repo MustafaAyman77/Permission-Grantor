@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -30,9 +33,11 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.InstallMobile
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
@@ -55,8 +60,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +72,7 @@ import com.example.model.AppFilterMode
 import com.example.model.GrantOperationLog
 import com.example.model.InstalledAppItem
 import com.example.model.ShizukuConnectionState
+import com.example.shizuku.ApkInstallReport
 import com.example.ui.components.AppIconImage
 import com.example.ui.components.ConnectionStatusBadge
 import com.example.ui.components.ShizukuAdbLevelNoticeCard
@@ -85,6 +93,7 @@ fun DashboardScreen(
     isLoadingApps: Boolean,
     searchQuery: String,
     appFilterMode: AppFilterMode,
+    latestInstallReport: ApkInstallReport?,
     bannerMessage: String?,
     isBannerError: Boolean,
     operationLogs: List<GrantOperationLog>,
@@ -92,11 +101,23 @@ fun DashboardScreen(
     onFilterModeChange: (AppFilterMode) -> Unit,
     onRecheckShizuku: () -> Unit,
     onRequestShizukuPermission: () -> Unit,
+    onOpenApkInstaller: () -> Unit,
+    onApkUriPicked: (Uri) -> Unit,
     onOpenSettingsGuide: () -> Unit,
     onSelectApp: (InstalledAppItem) -> Unit,
     onDismissBanner: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
+    val directApkPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            onApkUriPicked(uri)
+        }
+    }
+
     val filteredApps = remember(allApps, searchQuery, appFilterMode) {
         allApps.filter { app ->
             val matchesMode = when (appFilterMode) {
@@ -142,19 +163,50 @@ fun DashboardScreen(
             )
         }
 
-        // 2. Mandatory Technical Notice Card (ADB level vs Root)
+        // 2. Featured APK Spoofed Installer & Auto-Grant Card ("زر تثبيت APK")
+        item {
+            SpoofedInstallerQuickCard(
+                onPickApkClick = {
+                    if (shizukuState.isServiceConnected && !shizukuState.isPermissionGranted) {
+                        onRequestShizukuPermission()
+                    }
+                    directApkPickerLauncher.launch(
+                        arrayOf(
+                            "application/vnd.android.package-archive",
+                            "application/octet-stream",
+                            "*/*"
+                        )
+                    )
+                },
+                onOpenInstallerScreen = onOpenApkInstaller
+            )
+        }
+
+        // 3. Latest Installation Status Report Card if available
+        if (latestInstallReport != null) {
+            item {
+                InstallationStatusReportCard(
+                    report = latestInstallReport,
+                    onOpenSystemAppSettings = { pkg ->
+                        openAppDetailsSettings(context, pkg)
+                    }
+                )
+            }
+        }
+
+        // 4. Mandatory Technical Notice Card (ADB level vs Root & Protected Permissions)
         item {
             ShizukuAdbLevelNoticeCard()
         }
 
-        // 3. Recent Activity Log (if any permissions were granted in this session)
+        // 5. Recent Activity Log (if any permissions were granted in this session)
         if (operationLogs.isNotEmpty()) {
             item {
                 RecentGrantLogsCard(logs = operationLogs.take(4))
             }
         }
 
-        // 4. Target Application Selection Header & Search
+        // 6. Target Application Selection Header & Search
         item {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
@@ -246,7 +298,7 @@ fun DashboardScreen(
             }
         }
 
-        // 5. Installed Applications List
+        // 7. Installed Applications List
         if (isLoadingApps) {
             item {
                 Card(
@@ -323,6 +375,100 @@ fun DashboardScreen(
                     app = appItem,
                     onClick = { onSelectApp(appItem) }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpoofedInstallerQuickCard(
+    onPickApkClick: () -> Unit,
+    onOpenInstallerScreen: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                1.5.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                MaterialTheme.shapes.large
+            )
+            .testTag("dashboard_apk_installer_card"),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Storefront,
+                        contentDescription = "تثبيت بهوية المتجر",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "التثبيت بهوية المتجر + المنح التلقائي",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "تثبيت ملفات APK بهوية com.android.vending (أو F-Droid / Aurora) ومنح جميع صلاحياتها الحساسة تلقائياً عبر Shizuku",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Button(
+                    onClick = onPickApkClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("dashboard_install_apk_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.InstallMobile,
+                        contentDescription = stringResource(R.string.btn_install_apk),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(stringResource(R.string.btn_install_apk))
+                }
+
+                OutlinedButton(
+                    onClick = onOpenInstallerScreen,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("open_installer_options_button")
+                ) {
+                    Text("خيارات المتجر والتقرير")
+                }
             }
         }
     }
@@ -590,18 +736,24 @@ private fun InstalledAppCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-                    if (app.isSideloaded) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = "خارج المتجر",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                    Surface(
+                        color = if (app.isSideloaded) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = app.installerLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (app.isSideloaded) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
                     }
                 }
 

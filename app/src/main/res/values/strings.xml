@@ -1,19 +1,22 @@
 <resources>
     <string name="app_name">Permission Grantor</string>
-    <string name="app_subtitle">مانح الصلاحيات الفوري عبر Shizuku</string>
+    <string name="app_subtitle">مانح الصلاحيات الفوري ومثبت APK عبر Shizuku</string>
     <string name="status_connected">متصل</string>
     <string name="status_disconnected">غير متصل</string>
-    <string name="shizuku_note_title">ملاحظة تقنية هامة</string>
-    <string name="shizuku_note_body">يمنح Shizuku صلاحيات على مستوى ADB فقط وليس صلاحيات روت (Root) كاملة، ولذلك فإن بعض الصلاحيات المحمية من النظام قد لا تزال تتطلب تدخل المستخدم يدوياً.</string>
+    <string name="shizuku_note_title">ملاحظة حول القيود والصلاحيات</string>
+    <string name="shizuku_note_body">بعض الصلاحيات المحمية (مثل INSTALL_PACKAGES أو صلاحيات النظام) قد لا تزال تتطلب توقيع النظام أو روتاً، لكن Shizuku يغطي أغلب صلاحيات وقت التشغيل الشائعة على مستوى ADB.</string>
+    <string name="btn_install_apk">تثبيت APK</string>
     <string name="btn_grant_via_shizuku">منح الصلاحية عبر Shizuku</string>
     <string name="btn_grant_all_via_shizuku">منح جميع الصلاحيات المتبقية عبر Shizuku</string>
+    <string name="btn_manual_grant">منح يدوي</string>
     <string name="btn_request_shizuku_permission">طلب إذن استخدام Shizuku</string>
     <string name="btn_recheck_shizuku">إعادة فحص الاتصال</string>
     <string name="badge_granted">ممنوحة</string>
     <string name="badge_ungranted">غير ممنوحة</string>
     <string name="nav_home">الرئيسية</string>
-    <string name="nav_apps">التطبيقات</string>
-    <string name="nav_settings">دليل الإعدادات</string>
+    <string name="nav_installer">تثبيت APK</string>
+    <string name="nav_apps">الصلاحيات</string>
+    <string name="nav_settings">الإعدادات</string>
     <string name="err_shizuku_not_running">خدمة Shizuku غير مفعّلة</string>
     <string name="err_shizuku_permission_denied">لم يتم منح تطبيق Permission Grantor إذن الوصول إلى Shizuku بعد</string>
 </resources>
